@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
 import { create } from 'kubo-rpc-client';
 import { Buffer } from 'buffer';
+//import {ethers } from 'ethers';
 import JSZip from 'jszip';
+
 const ipfsClient = create({ host: 'localhost', port: 5001, protocol: 'http' });
+//const provider = new ethers.providers.Web3Provider(window.ethereum);
 
 function App() {
   const [uploading, setUploading] = useState(false);
@@ -21,25 +24,32 @@ function App() {
     fileInput.webkitdirectory = true;
     fileInput.directory = '';
     fileInput.style.display = 'none';
-
+  
     fileInput.addEventListener('change', async (event) => {
       const files = event.target.files;
+      const filesArray = Array.from(files);
+      const directoryStructure = filesArray.reduce((acc, file) => {
+        const pathParts = file.webkitRelativePath.split('/');
+        pathParts.pop(); // remove the file name
+        acc[file.webkitRelativePath] = pathParts.join('/');
+        return acc;
+      }, {});
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        await uploadFile(file);
+        await uploadFile(file, directoryStructure[file.webkitRelativePath]);
       }
     });
-
+  
     fileInput.click();
   };
-
-  const uploadFile = async (file) => {
+  
+  const uploadFile = async (file, relativePath) => {
     const reader = new window.FileReader();
     reader.readAsArrayBuffer(file);
     reader.onloadend = async () => {
       const buffer = Buffer.from(reader.result);
       const fileDetails = {
-        path: `/${parentDir}/${file.name}`,
+        path: `/${parentDir}/${relativePath}/${file.name}`, // Include parent directory and relative path in the file path
         content: buffer,
       };
       await ipfsClient.files.write(fileDetails.path, fileDetails.content, {
@@ -50,27 +60,17 @@ function App() {
     };
   };
 
+  
+
   const handleDownload = async () => {
     if (!parentDir) {
       alert('Please initialize the project first.');
       return;
     }
-
-    const downloadDir = await ipfsClient.files.ls(`/${parentDir}`);
+  
     const zip = new JSZip();
-
-    for await (const file of downloadDir) {
-      if (file.type === 'file') {
-        const fileStream = ipfsClient.cat(file.cid);
-        const chunks = [];
-        for await (const chunk of fileStream) {
-          chunks.push(chunk);
-        }
-        const fileData = Buffer.concat(chunks);
-        zip.file(file.name, fileData);
-      }
-    }
-
+    await downloadDir(`/${parentDir}`, zip);
+  
     zip.generateAsync({ type: 'blob' }).then((content) => {
       // Trigger download
       const downloadLink = document.createElement('a');
@@ -78,6 +78,25 @@ function App() {
       downloadLink.download = `${parentDir}.zip`;
       downloadLink.click();
     });
+  };
+  
+  const downloadDir = async (dirPath, zipFolder) => {
+    const files = await ipfsClient.files.ls(dirPath);
+  
+    for await (const file of files) {
+      if (file.type === 'file') {
+        const fileStream = ipfsClient.cat(file.cid);
+        const chunks = [];
+        for await (const chunk of fileStream) {
+          chunks.push(chunk);
+        }
+        const fileData = Buffer.concat(chunks);
+        zipFolder.file(file.name, fileData);
+      } else if (file.type === 'directory') {
+        const subFolder = zipFolder.folder(file.name);
+        await downloadDir(`${dirPath}/${file.name}`, subFolder);
+      }
+    }
   };
 
   return (
